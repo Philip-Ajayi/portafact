@@ -1,0 +1,17 @@
+{
+  "name": "portafact-protocol",
+  "version": "1.0.0",
+  "description": "Autonomous RWA Invoice Factoring & Default-Insured Tranche Vault on Portaldot V3.0 EVM",
+  "scripts": {
+    "compile": "forge build",
+    "test": "forge test -vvv",
+    "deploy:local": "forge script script/DeployPortaFact.s.sol --rpc-url http://127.0.0.1:8545 --broadcast",
+    "deploy:testnet": "forge script script/DeployPortaFact.s.sol --rpc-url https://rpc.testnet.portaldot.network --broadcast --verify",
+    "relayer:start": "cd relayer && npm install && npm run start",
+    "frontend:dev": "cd frontend && npm install && npm run dev",
+    "frontend:build": "cd frontend && npm install && npm run build"
+  },
+  "keywords": ["rwa", "factoring", "portaldot", "evm", "daas", "erc4626"],
+  "author": "PortaFact Core Engineering",
+  "license": "MIT"
+}

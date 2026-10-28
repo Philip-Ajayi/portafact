@@ -1,0 +1,59 @@
+# ==========================================
+# Environment Variables & Private Keys
+# ==========================================
+.env
+.env*.local
+.env.production
+.env.development
+*.env
+.env.example
+
+# Keystores & Wallet keys
+keystore/
+*.key
+*.pem
+
+# ==========================================
+# Foundry / Solidity Compilation Artifacts
+# ==========================================
+out/
+cache/
+broadcast/
+
+# ==========================================
+# Node.js Dependencies (Root, Relayer, Frontend)
+# ==========================================
+node_modules/
+relayer/node_modules/
+frontend/node_modules/
+
+# Node package manager logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ==========================================
+# Next.js Build Output & Cache
+# ==========================================
+frontend/.next/
+.next/
+frontend/out/
+*.tsbuildinfo
+.turbo/
+
+# ==========================================
+# Relayer / Build Output
+# ==========================================
+dist/
+relayer/dist/
+
+# ==========================================
+# System & Editor Files
+# ==========================================
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

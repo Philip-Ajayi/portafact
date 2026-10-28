@@ -1,0 +1,19 @@
+{
+  "name": "portafact-daas-relayer",
+  "version": "1.0.0",
+  "main": "daas-relayer.ts",
+  "scripts": {
+    "start": "ts-node daas-relayer.ts"
+  },
+  "dependencies": {
+    "@polkadot/api": "^10.12.1",
+    "@polkadot/keyring": "^12.6.2",
+    "dotenv": "^16.4.5",
+    "ethers": "^6.11.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.24",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  }
+}

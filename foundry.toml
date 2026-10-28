@@ -1,0 +1,13 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+solc_version = "0.8.24"
+optimizer = true
+optimizer_runs = 200
+evm_version = "cancun"
+fs_permissions = [{ access = "read-write", path = "./" }]
+
+[rpc_endpoints]
+portaldot_local = "http://127.0.0.1:8545"
+portaldot_testnet = "https://rpc.testnet.portaldot.network"

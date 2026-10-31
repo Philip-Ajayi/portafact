@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 set -e
 
 TARGET_PORT="${PORT:-3000}"
@@ -8,7 +8,7 @@ echo "⚡ Starting PortaFact DaaS Relayer Daemon in background..."
 echo "=========================================================="
 (
   cd /app/relayer
-  npx ts-node daas-relayer.ts 2>&1 | sed 's/^/[RELAYER] /'
+  npm run start 2>&1 | sed 's/^/[RELAYER] /'
 ) &
 RELAYER_PID=$!
 
@@ -21,14 +21,16 @@ cleanup() {
   echo "Terminating services..."
   kill -TERM "$RELAYER_PID" 2>/dev/null || true
   kill -TERM "$NEXT_PID" 2>/dev/null || true
-  wait "$NEXT_PID" 2>/dev/null || true
-  wait "$RELAYER_PID" 2>/dev/null || true
-  exit 0
 }
 
-trap cleanup SIGINT SIGTERM
+# POSIX standard signal names (INT and TERM without the SIG prefix)
+trap cleanup INT TERM
 
 npx next start -H 0.0.0.0 -p "$TARGET_PORT" &
 NEXT_PID=$!
 
 wait "$NEXT_PID"
+EXIT_CODE=$?
+
+cleanup
+exit $EXIT_CODE

@@ -17,6 +17,18 @@ echo "🌐 Starting Next.js Web Interface on 0.0.0.0:$TARGET_PORT"
 echo "=========================================================="
 cd /app/frontend
 
-trap "kill -TERM $RELAYER_PID; exit 0" SIGINT SIGTERM
+cleanup() {
+  echo "Terminating services..."
+  kill -TERM "$RELAYER_PID" 2>/dev/null || true
+  kill -TERM "$NEXT_PID" 2>/dev/null || true
+  wait "$NEXT_PID" 2>/dev/null || true
+  wait "$RELAYER_PID" 2>/dev/null || true
+  exit 0
+}
 
-exec npx next start -H 0.0.0.0 -p "$TARGET_PORT"
+trap cleanup SIGINT SIGTERM
+
+npx next start -H 0.0.0.0 -p "$TARGET_PORT" &
+NEXT_PID=$!
+
+wait "$NEXT_PID"

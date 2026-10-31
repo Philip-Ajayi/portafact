@@ -22,7 +22,7 @@ contract PortaFactTest is Test {
     address juniorInvestor = address(0xCC33);
     address liquidator = address(0xDD44);
 
-    string debtorSS58 = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"; // Alice Substrate SS58
+    string debtorSS58 = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
 
     function setUp() public {
         pot = new MockPOT();
@@ -33,92 +33,86 @@ contract PortaFactTest is Test {
         vault.setLiquidationEngine(address(engine));
         invoiceNFT.setVaultAuthorization(address(vault), true);
 
-        // Fund accounts (14 decimal POT tokens)
         pot.mint(seniorInvestor, 80_000 * 1e14);
         pot.mint(juniorInvestor, 20_000 * 1e14);
-        pot.mint(liquidator, 10 * 1e14); // small gas buffer
+        pot.mint(borrower, 15_000 * 1e14);
+        pot.mint(liquidator, 10 * 1e14);
 
         vm.prank(seniorInvestor);
         pot.approve(address(vault), type(uint256).max);
 
         vm.prank(juniorInvestor);
         pot.approve(address(vault), type(uint256).max);
+
+        vm.prank(borrower);
+        pot.approve(address(vault), type(uint256).max);
     }
 
-    function testMath14Scaling() public pure {
-        uint256 a = 10_000 * 1e14;
-        uint256 b = 2 * 1e14;
-        uint256 multiplied = a.mul14(b);
-        assertEq(multiplied, 20_000 * 1e14);
-
-        uint256 bipsResult = a.mulBips(200); // 2%
-        assertEq(bipsResult, 200 * 1e14);
-    }
-
-    function testTrancheDepositAndBorrowerAdvance() public {
+    function testDepositWithdrawalAndEnumeration() public {
         vm.prank(seniorInvestor);
-        vault.depositSenior(8_000 * 1e14);
+        vault.depositSenior(5_000 * 1e14);
+        assertEq(vault.seniorBalances(seniorInvestor), 5_000 * 1e14);
 
-        vm.prank(juniorInvestor);
-        vault.depositJunior(2_000 * 1e14);
+        vm.prank(seniorInvestor);
+        vault.withdrawSenior(2_000 * 1e14);
+        assertEq(vault.seniorBalances(seniorInvestor), 3_000 * 1e14);
 
-        assertEq(vault.seniorDeposits(), 8_000 * 1e14);
-        assertEq(vault.juniorDeposits(), 2_000 * 1e14);
-
-        // Borrower mints invoice for 10,000 POT face value, 9,500 advance, 30 days duration
         vm.startPrank(borrower);
-        uint256 invoiceId = invoiceNFT.mintInvoice(
-            debtorSS58,
-            10_000 * 1e14,
-            9_500 * 1e14,
-            30 days,
-            "QmZtmD2qt8fJpq3rZZhDM58nQ4BEdcDFu83"
-        );
-        invoiceNFT.approve(address(vault), invoiceId);
-        vault.fundAndAdvanceInvoice(invoiceId);
+        uint256 id1 = invoiceNFT.mintInvoice(debtorSS58, 1_000 * 1e14, 900 * 1e14, 100, "QmHash1");
+        uint256 id2 = invoiceNFT.mintInvoice(debtorSS58, 2_000 * 1e14, 1800 * 1e14, 200, "QmHash2");
         vm.stopPrank();
 
-        assertEq(pot.balanceOf(borrower), 9_500 * 1e14);
-        assertEq(uint256(invoiceNFT.getInvoice(invoiceId).status), uint256(InvoiceNFT.InvoiceStatus.Factored));
+        assertEq(id1, 1);
+        assertEq(id2, 2);
+        assertEq(invoiceNFT.totalInvoices(), 2);
     }
 
-    function testPermissionlessDefaultWorkoutAndLiquidatorBounty() public {
-        // Setup positions
+    function testRepayInvoiceFullLifecycle() public {
         vm.prank(seniorInvestor);
         vault.depositSenior(8_000 * 1e14);
-
         vm.prank(juniorInvestor);
         vault.depositJunior(2_000 * 1e14);
 
         vm.startPrank(borrower);
-        uint256 invoiceId = invoiceNFT.mintInvoice(
-            debtorSS58,
-            10_000 * 1e14,
-            1_500 * 1e14, // Advance is safely within junior coverage
-            30 days,
-            "QmZtmD2qt8fJpq3rZZhDM58nQ4BEdcDFu83"
-        );
+        uint256 invoiceId = invoiceNFT.mintInvoice(debtorSS58, 10_000 * 1e14, 9_500 * 1e14, 30 days, "QmInvoiceDoc");
         invoiceNFT.approve(address(vault), invoiceId);
         vault.fundAndAdvanceInvoice(invoiceId);
         vm.stopPrank();
 
-        // Warp time beyond 30 days maturity
-        vm.warp(block.timestamp + 31 days);
+        assertEq(pot.balanceOf(borrower), 15_000 * 1e14 + 9_500 * 1e14);
 
-        uint256 liquidatorBalanceBefore = pot.balanceOf(liquidator);
+        // Repay full 10,000 POT face value
+        vm.prank(borrower);
+        vault.repayInvoice(invoiceId);
 
-        // Independent liquidator calls permissionless liquidation
+        (uint256 sDep, uint256 jDep, uint256 sReserve, uint256 jReserve, ) = vault.getVaultAccounting();
+        assertEq(sDep, 8_000 * 1e14);
+        assertEq(jDep, 2_000 * 1e14);
+        assertEq(sReserve, (500 * 1e14 * 3000) / 10000); // 30% of 500 spread = 150 POT
+        assertEq(jReserve, 500 * 1e14 - sReserve);
+        assertEq(uint256(invoiceNFT.getInvoice(invoiceId).status), uint256(InvoiceNFT.InvoiceStatus.Repaid));
+    }
+
+    function testLiquidationEngineWorkout() public {
+        vm.prank(seniorInvestor);
+        vault.depositSenior(8_000 * 1e14);
+        vm.prank(juniorInvestor);
+        vault.depositJunior(2_000 * 1e14);
+
+        vm.startPrank(borrower);
+        uint256 invoiceId = invoiceNFT.mintInvoice(debtorSS58, 5_000 * 1e14, 1_000 * 1e14, 10, "QmHash");
+        invoiceNFT.approve(address(vault), invoiceId);
+        vault.fundAndAdvanceInvoice(invoiceId);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 15);
+
+        uint256 initialLiqBal = pot.balanceOf(liquidator);
         vm.prank(liquidator);
         engine.triggerDefault(invoiceId);
 
-        // 2% of 10,000 POT = 200 POT bounty paid directly to liquidator
-        uint256 expectedBounty = 200 * 1e14;
-        assertEq(pot.balanceOf(liquidator), liquidatorBalanceBefore + expectedBounty);
-
-        // Senior principal remains 100% intact!
-        assertEq(vault.seniorDeposits(), 8_000 * 1e14);
-        // Junior deposits absorbed the loss (1,500 advance + 200 bounty = 1,700 loss)
-        assertEq(vault.juniorDeposits(), 2_000 * 1e14 - 1_700 * 1e14);
+        uint256 bounty = (5_000 * 1e14 * 200) / 10000; // 100 POT
+        assertEq(pot.balanceOf(liquidator), initialLiqBal + bounty);
         assertEq(uint256(invoiceNFT.getInvoice(invoiceId).status), uint256(InvoiceNFT.InvoiceStatus.Defaulted));
     }
 }

@@ -1,86 +1,77 @@
 "use client";
 
 import React, { useState } from "react";
-import { PlayCircle, CheckCircle2, Wallet, Droplets, Loader2 } from "lucide-react";
+import { Wallet, Droplets, Loader2, Link2 } from "lucide-react";
 import { formatAddress } from "../lib/substrate";
+import { Math14 } from "../lib/contracts";
 
-interface BannerProps {
-  isSandbox: boolean;
-  setIsSandbox: (v: boolean) => void;
-  onReset: () => void;
+interface Props {
+  blockNumber: bigint;
   walletAddress: string | null;
+  potBalance: bigint;
   onConnectWallet: () => Promise<void>;
-  onClaimFaucet: () => Promise<void>;
+  onClaimFaucet: (target?: string, amount?: string) => Promise<void>;
   isClaimingFaucet: boolean;
 }
 
 export default function LiveSandboxBanner({
-  isSandbox,
-  setIsSandbox,
-  onReset,
+  blockNumber,
   walletAddress,
+  potBalance,
   onConnectWallet,
   onClaimFaucet,
   isClaimingFaucet,
-}: BannerProps) {
+}: Props) {
+  const [faucetAmt, setFaucetAmt] = useState("10000");
+
   return (
-    <div className="bg-indigo-950/70 border-b border-indigo-500/30 px-6 py-3 flex flex-wrap items-center justify-between gap-4">
+    <div className="bg-gray-950 border-b border-border px-6 py-2.5 flex flex-wrap items-center justify-between gap-4 text-xs">
       <div className="flex items-center gap-3">
-        <span className="flex h-3 w-3 relative">
+        <span className="flex h-2.5 w-2.5 relative">
           <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-          <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+          <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
         </span>
-        <p className="text-sm font-medium text-indigo-200">
-          <strong className="text-white">Portaldot Hackathon Evaluation Engine:</strong> Complete testnet & instant in-browser interactive simulator.
-        </p>
+        <div className="flex items-center gap-2">
+          <span className="font-bold text-white uppercase tracking-wider">Live EVM Testnet</span>
+          <span className="text-gray-500">•</span>
+          <span className="text-gray-400 font-mono">Block #{blockNumber.toString()}</span>
+        </div>
       </div>
 
       <div className="flex items-center flex-wrap gap-3">
-        {/* Toggle Mode Button */}
+        {walletAddress && (
+          <div className="bg-surface border border-gray-800 px-3 py-1 rounded-md text-gray-300 font-mono flex items-center gap-1.5">
+            <span className="text-gray-500">Balance:</span>
+            <span className="font-bold text-emerald-400">{Math14.format(potBalance)} $POT</span>
+          </div>
+        )}
+
         <button
-          onClick={() => setIsSandbox(!isSandbox)}
-          className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all flex items-center gap-2 ${
-            isSandbox
-              ? "bg-amber-600/30 text-amber-200 border border-amber-500/50 hover:bg-amber-600/40"
-              : "bg-emerald-600 text-white shadow-lg shadow-emerald-900/40"
-          }`}
+          onClick={onConnectWallet}
+          className="px-3 py-1.5 font-semibold rounded-lg bg-surface border border-gray-700 hover:border-gray-500 text-white flex items-center gap-1.5 transition-all"
         >
-          {isSandbox ? <PlayCircle size={14} /> : <CheckCircle2 size={14} />}
-          {isSandbox ? "Sandbox Mode Active (Simulated)" : "Live EVM Testnet Mode Active"}
+          <Wallet size={13} className="text-primary" />
+          {walletAddress ? formatAddress(walletAddress) : "Connect EVM Wallet"}
         </button>
 
-        {!isSandbox && (
-          <>
-            {/* Live Wallet Connect */}
-            <button
-              onClick={onConnectWallet}
-              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-surface border border-gray-700 hover:border-gray-500 text-white flex items-center gap-1.5"
-            >
-              <Wallet size={14} className="text-primary" />
-              {walletAddress ? formatAddress(walletAddress) : "Connect Wallet"}
-            </button>
-
-            {/* 1-Click Testnet POT Faucet */}
-            <button
-              onClick={onClaimFaucet}
-              disabled={isClaimingFaucet || !walletAddress}
-              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white flex items-center gap-1.5"
-              title="Mints 10,000 $POT directly on-chain to your wallet"
-            >
-              {isClaimingFaucet ? <Loader2 size={14} className="animate-spin" /> : <Droplets size={14} />}
-              Claim 10,000 $POT Faucet
-            </button>
-          </>
-        )}
-
-        {isSandbox && (
+        <div className="flex items-center bg-surface border border-gray-800 rounded-lg overflow-hidden">
+          <input
+            type="number"
+            value={faucetAmt}
+            onChange={(e) => setFaucetAmt(e.target.value)}
+            className="w-20 bg-transparent px-2 py-1 text-white text-xs focus:outline-none font-mono"
+            placeholder="Amount"
+          />
           <button
-            onClick={onReset}
-            className="text-xs text-gray-400 hover:text-white underline underline-offset-2"
+            onClick={() => onClaimFaucet(walletAddress || undefined, faucetAmt)}
+            disabled={isClaimingFaucet || !walletAddress}
+            className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white px-3 py-1 font-semibold flex items-center gap-1 text-xs"
+            title="Calls MockPOT.faucet() directly on-chain"
           >
-            Reset Simulator
+            {isClaimingFaucet ? <Loader2 size={12} className="animate-spin" /> : <Droplets size={12} />}
+            Claim Faucet
           </button>
-        )}
+        </div>
       </div>
     </div>
   );

@@ -6,7 +6,8 @@ dotenv.config({ path: "../.env" });
 
 const EVM_RPC = process.env.PORTALDOT_EVM_RPC || "http://127.0.0.1:8545";
 const SUBSTRATE_WS = process.env.SUBSTRATE_WS_RPC || "ws://127.0.0.1:9944";
-const LIQUIDATION_ENGINE_ADDRESS = process.env.NEXT_PUBLIC_LIQUIDATION_ENGINE_ADDRESS || "";
+const LIQUIDATION_ENGINE_ADDRESS =
+  process.env.NEXT_PUBLIC_LIQUIDATION_ENGINE_ADDRESS || "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9";
 const SUBSTRATE_SEED = process.env.RELAYER_SUBSTRATE_SEED || "//Alice";
 
 const ENGINE_ABI = [
@@ -15,71 +16,83 @@ const ENGINE_ABI = [
 
 async function startDaemon() {
   console.log("========================================================");
-  console.log("🚀 PortaFact DaaS Substrate Relayer Daemon Initiating...");
-  console.log(`Connecting to EVM RPC: ${EVM_RPC}`);
-  console.log(`Connecting to Substrate WS: ${SUBSTRATE_WS}`);
+  console.log("⚡ PortaFact Production Substrate DaaS Relayer Starting");
+  console.log(`EVM RPC:        ${EVM_RPC}`);
+  console.log(`Substrate WS:   ${SUBSTRATE_WS}`);
+  console.log(`Engine Contract: ${LIQUIDATION_ENGINE_ADDRESS}`);
   console.log("========================================================");
 
-  // 1. Initialize Substrate API
-  let substrateApi: ApiPromise | null = null;
-  let relayerKeypair: any = null;
+  // 1. Establish Real Substrate WebSocket Connection
+  const wsProvider = new WsProvider(SUBSTRATE_WS);
+  wsProvider.on("error", (err) => {
+    console.error(`[Substrate WS Error] Connection error:`, err);
+  });
 
-  try {
-    const wsProvider = new WsProvider(SUBSTRATE_WS);
-    substrateApi = await ApiPromise.create({ provider: wsProvider });
-    const keyring = new Keyring({ type: "sr25519" });
-    relayerKeypair = keyring.addFromUri(SUBSTRATE_SEED);
-    console.log(`[Substrate] Connected. Relayer SS58: ${relayerKeypair.address}`);
-  } catch (err) {
-    console.warn(`[Substrate] Warning: Running in simulated Substrate fallback mode (${(err as Error).message})`);
-  }
+  const substrateApi = await ApiPromise.create({ provider: wsProvider });
+  await substrateApi.isReady;
 
-  // 2. Initialize EVM Provider & Event Listener
+  const keyring = new Keyring({ type: "sr25519" });
+  const relayerKeypair = keyring.addFromUri(SUBSTRATE_SEED);
+
+  const [chain, nodeName, nodeVersion] = await Promise.all([
+    substrateApi.rpc.system.chain(),
+    substrateApi.rpc.system.name(),
+    substrateApi.rpc.system.version(),
+  ]);
+
+  console.log(`[Substrate] Connected to ${chain} running ${nodeName} v${nodeVersion}`);
+  console.log(`[Substrate] Relayer SS58 Address: ${relayerKeypair.address}`);
+
+  // 2. Establish Real EVM JSON-RPC Provider
   const evmProvider = new ethers.JsonRpcProvider(EVM_RPC);
-  if (!LIQUIDATION_ENGINE_ADDRESS || LIQUIDATION_ENGINE_ADDRESS === "") {
-    console.warn("[EVM] Waiting for contract address deployment. Polling standby...");
-    return;
-  }
+  const network = await evmProvider.getNetwork();
+  console.log(`[EVM] Connected to Chain ID: ${network.chainId.toString()}`);
 
   const engineContract = new ethers.Contract(LIQUIDATION_ENGINE_ADDRESS, ENGINE_ABI, evmProvider);
-
-  console.log(`[EVM] Listening for InvoiceDefaultTriggered on ${LIQUIDATION_ENGINE_ADDRESS}...`);
+  console.log(`[EVM] Listening for live InvoiceDefaultTriggered events...`);
 
   engineContract.on(
     "InvoiceDefaultTriggered",
-    async (invoiceId, caller, callerBounty, totalDebtAmount, debtorSS58, timestamp) => {
-      console.log("\n--------------------------------------------------------");
-      console.log(`🚨 [DEFAULT DETECTED] Invoice ID: ${invoiceId.toString()}`);
-      console.log(`   Liquidator Caller: ${caller}`);
-      console.log(`   Bounty Disbursed:  ${ethers.formatUnits(callerBounty, 14)} POT`);
-      console.log(`   Overdue Debt:      ${ethers.formatUnits(totalDebtAmount, 14)} POT`);
-      console.log(`   Debtor SS58:       ${debtorSS58}`);
-      console.log("--------------------------------------------------------");
+    async (invoiceId: bigint, caller: string, callerBounty: bigint, totalDebtAmount: bigint, debtorSS58: string, timestamp: bigint) => {
+      console.log("\n========================================================");
+      console.log(`🚨 LIVE DEFAULT EVENT CAPTURED ON-CHAIN`);
+      console.log(`Invoice ID:     #${invoiceId.toString()}`);
+      console.log(`Liquidator:     ${caller}`);
+      console.log(`Caller Bounty:  ${ethers.formatUnits(callerBounty, 14)} POT`);
+      console.log(`Debt Amount:    ${ethers.formatUnits(totalDebtAmount, 14)} POT`);
+      console.log(`Debtor SS58:    ${debtorSS58}`);
+      console.log(`Timestamp:      ${new Date(Number(timestamp) * 1000).toISOString()}`);
+      console.log("========================================================");
 
-      // 3. Dispatch Extrinsic to Portaldot Layer-0 DaaS Module
-      if (substrateApi && relayerKeypair) {
-        try {
-          console.log(`[DaaS] Submitting extrinsic daas.reportDefault(${invoiceId}, ${totalDebtAmount})...`);
+      const payload = `DaaS:PORTAFACT:DEBT_DEFAULT:INV=${invoiceId}:AMT=${totalDebtAmount}:DEBTOR=${debtorSS58}`;
 
-          // Construct DaaS call or generic system remark fallback for testnets
-          const tx = substrateApi.tx.system
-            ? substrateApi.tx.system.remark(`DaaS:DEFAULT_REPORT:INV_${invoiceId}:DEBT_${totalDebtAmount}`)
-            : null;
+      try {
+        console.log(`[Substrate DaaS] Submitting extrinsic to Layer-0...`);
+        const tx = substrateApi.tx.system.remarkWithEvent
+          ? substrateApi.tx.system.remarkWithEvent(payload)
+          : substrateApi.tx.system.remark(payload);
 
-          if (tx) {
-            const unsub = await tx.signAndSend(relayerKeypair, ({ status, events }) => {
-              console.log(`[DaaS Status] Transaction status: ${status.type}`);
-              if (status.isInBlock) {
-                console.log(`[DaaS Confirmed] Included in Substrate block: ${status.asInBlock.toHex()}`);
-                unsub();
-              }
-            });
+        const unsub = await tx.signAndSend(relayerKeypair, ({ status, events, dispatchError }) => {
+          if (dispatchError) {
+            if (dispatchError.isModule) {
+              const decoded = substrateApi.registry.findMetaError(dispatchError.asModule);
+              console.error(`[DaaS Dispatch Error] ${decoded.section}.${decoded.name}: ${decoded.docs.join(" ")}`);
+            } else {
+              console.error(`[DaaS Dispatch Error] ${dispatchError.toString()}`);
+            }
+            unsub();
+            return;
           }
-        } catch (subErr) {
-          console.error("[DaaS Error] Failed to submit Substrate extrinsic:", subErr);
-        }
-      } else {
-        console.log(`[Simulated DaaS] Extrinsic dispatched -> daas.reportDefault(${invoiceId}) completed.`);
+
+          if (status.isInBlock) {
+            console.log(`[DaaS Confirmed] Extrinsic included in Block Hash: ${status.asInBlock.toHex()}`);
+          } else if (status.isFinalized) {
+            console.log(`[DaaS Finalized] Extrinsic finalized in Block Hash: ${status.asFinalized.toHex()}`);
+            unsub();
+          }
+        });
+      } catch (err) {
+        console.error(`[DaaS Relaying Failed]:`, err);
       }
     }
   );

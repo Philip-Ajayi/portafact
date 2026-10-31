@@ -1,4 +1,4 @@
-import { defineChain } from "viem";
+import { defineChain, parseUnits, formatUnits } from "viem";
 
 export const CONTRACT_ADDRESSES = {
   potToken: (process.env.NEXT_PUBLIC_POT_TOKEN_ADDRESS || "0x5FbDB2315678afecb367f032d93F642f64180aa3") as `0x${string}`,
@@ -8,33 +8,25 @@ export const CONTRACT_ADDRESSES = {
 };
 
 export const TARGET_CHAIN = defineChain({
-  id: 31337, // Set to your live testnet chain ID (e.g. 31337 for local, or Portaldot EVM Testnet ID)
-  name: "Portaldot EVM Testnet",
+  id: 31337,
+  name: "Portaldot EVM Local/Testnet",
   nativeCurrency: { name: "Portaldot Token", symbol: "POT", decimals: 14 },
   rpcUrls: {
-    default: { http: [process.env.PORTALDOT_EVM_RPC || "http://127.0.0.1:8545"] },
+    default: { http: [process.env.NEXT_PUBLIC_PORTALDOT_EVM_RPC || process.env.PORTALDOT_EVM_RPC || "http://127.0.0.1:8545"] },
   },
 });
 
 export const Math14 = {
-  SCALE: BigInt(1e14),
-  format(val: bigint | number): string {
-    const bVal = typeof val === "number" ? BigInt(Math.floor(val)) * BigInt(1e14) : val;
-    const intPart = bVal / BigInt(1e14);
-    const fracPart = bVal % BigInt(1e14);
-    const fracStr = fracPart.toString().padStart(14, "0").slice(0, 2);
-    return `${intPart.toLocaleString()}.${fracStr}`;
+  parse: (val: string | number): bigint => {
+    const str = typeof val === "number" ? val.toFixed(4) : val.trim();
+    return parseUnits(str === "" ? "0" : str, 14);
   },
-  parse(val: string | number): bigint {
-    const sVal = val.toString();
-    const parts = sVal.split(".");
-    const intPart = BigInt(parts[0] || "0") * BigInt(1e14);
-    let fracPart = BigInt(0);
-    if (parts[1]) {
-      const padded = parts[1].slice(0, 14).padEnd(14, "0");
-      fracPart = BigInt(padded);
-    }
-    return intPart + fracPart;
+  format: (val: bigint | undefined | null, decimals = 2): string => {
+    if (!val) return "0.00";
+    const formatted = formatUnits(val, 14);
+    const parts = formatted.split(".");
+    if (parts.length === 1) return parts[0];
+    return `${parts[0]}.${parts[1].slice(0, decimals)}`;
   },
 };
 
@@ -46,6 +38,7 @@ export const MOCK_POT_ABI = [
 ] as const;
 
 export const INVOICE_NFT_ABI = [
+  { inputs: [], name: "totalInvoices", outputs: [{ type: "uint256" }], stateMutability: "view", type: "function" },
   { inputs: [{ name: "debtorSS58", type: "string" }, { name: "faceValue", type: "uint256" }, { name: "advanceAmount", type: "uint256" }, { name: "durationInSeconds", type: "uint256" }, { name: "ipfsHash", type: "string" }], name: "mintInvoice", outputs: [{ type: "uint256" }], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "to", type: "address" }, { name: "tokenId", type: "uint256" }], name: "approve", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "id", type: "uint256" }], name: "getInvoice", outputs: [{ components: [{ name: "id", type: "uint256" }, { name: "borrower", type: "address" }, { name: "debtorSS58", type: "string" }, { name: "faceValue", type: "uint256" }, { name: "advanceAmount", type: "uint256" }, { name: "dueDate", type: "uint256" }, { name: "ipfsHash", type: "string" }, { name: "status", type: "uint8" }], type: "tuple" }], stateMutability: "view", type: "function" },
@@ -55,13 +48,21 @@ export const INVOICE_NFT_ABI = [
 export const TRANCHE_VAULT_ABI = [
   { inputs: [{ name: "amount", type: "uint256" }], name: "depositSenior", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "amount", type: "uint256" }], name: "depositJunior", outputs: [], stateMutability: "nonpayable", type: "function" },
+  { inputs: [{ name: "amount", type: "uint256" }], name: "withdrawSenior", outputs: [], stateMutability: "nonpayable", type: "function" },
+  { inputs: [{ name: "amount", type: "uint256" }], name: "withdrawJunior", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "invoiceId", type: "uint256" }], name: "fundAndAdvanceInvoice", outputs: [], stateMutability: "nonpayable", type: "function" },
+  { inputs: [{ name: "invoiceId", type: "uint256" }], name: "repayInvoice", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [], name: "seniorDeposits", outputs: [{ type: "uint256" }], stateMutability: "view", type: "function" },
   { inputs: [], name: "juniorDeposits", outputs: [{ type: "uint256" }], stateMutability: "view", type: "function" },
+  { inputs: [], name: "seniorYieldReserve", outputs: [{ type: "uint256" }], stateMutability: "view", type: "function" },
+  { inputs: [], name: "juniorYieldReserve", outputs: [{ type: "uint256" }], stateMutability: "view", type: "function" },
   { inputs: [{ name: "", type: "address" }], name: "seniorBalances", outputs: [{ type: "uint256" }], stateMutability: "view", type: "function" },
   { inputs: [{ name: "", type: "address" }], name: "juniorBalances", outputs: [{ type: "uint256" }], stateMutability: "view", type: "function" },
+  { inputs: [{ name: "", type: "uint256" }], name: "activeFactoredInvoices", outputs: [{ type: "bool" }], stateMutability: "view", type: "function" },
+  { inputs: [], name: "getVaultAccounting", outputs: [{ type: "uint256" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }], stateMutability: "view", type: "function" },
 ] as const;
 
 export const LIQUIDATION_ENGINE_ABI = [
   { inputs: [{ name: "invoiceId", type: "uint256" }], name: "triggerDefault", outputs: [], stateMutability: "nonpayable", type: "function" },
+  { inputs: [], name: "BOUNTY_BIPS", outputs: [{ type: "uint256" }], stateMutability: "view", type: "function" },
 ] as const;

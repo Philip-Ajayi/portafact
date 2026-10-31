@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
-import { createWalletClient, createPublicClient, custom, http, parseAbiItem } from "viem";
+import React, { useState, useEffect, useCallback } from "react";
+import { createWalletClient, createPublicClient, custom, http } from "viem";
 import LiveSandboxBanner from "../components/LiveSandboxBanner";
 import BorrowerTab from "../components/BorrowerTab";
 import InvestorTab from "../components/InvestorTab";
@@ -17,43 +17,44 @@ import {
   LIQUIDATION_ENGINE_ABI,
 } from "../lib/contracts";
 
+export interface OnChainInvoice {
+  id: number;
+  borrower: `0x${string}`;
+  debtorSS58: string;
+  faceValue: bigint;
+  advanceAmount: bigint;
+  dueDate: number;
+  ipfsHash: string;
+  status: number; // 0: Active, 1: Factored, 2: Repaid, 3: Defaulted
+}
+
 export default function Home() {
-  const [isSandbox, setIsSandbox] = useState(false); // Default to real live on-chain mode
   const [activeTab, setActiveTab] = useState<"invest" | "borrow" | "liquidate">("invest");
   const [walletAddress, setWalletAddress] = useState<`0x${string}` | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isClaimingFaucet, setIsClaimingFaucet] = useState(false);
+  const [blockNumber, setBlockNumber] = useState<bigint>(0n);
 
   // Live on-chain balances
-  const [seniorBalance, setSeniorBalance] = useState(0);
-  const [juniorBalance, setJuniorBalance] = useState(0);
-  const [seniorVaultTotal, setSeniorVaultTotal] = useState(0);
-  const [juniorVaultTotal, setJuniorVaultTotal] = useState(0);
-  const [potWalletBalance, setPotWalletBalance] = useState(0);
+  const [seniorBalance, setSeniorBalance] = useState<bigint>(0n);
+  const [juniorBalance, setJuniorBalance] = useState<bigint>(0n);
+  const [seniorVaultTotal, setSeniorVaultTotal] = useState<bigint>(0n);
+  const [juniorVaultTotal, setJuniorVaultTotal] = useState<bigint>(0n);
+  const [seniorYieldReserve, setSeniorYieldReserve] = useState<bigint>(0n);
+  const [juniorYieldReserve, setJuniorYieldReserve] = useState<bigint>(0n);
+  const [potWalletBalance, setPotWalletBalance] = useState<bigint>(0n);
 
-  // Invoice tracking
-  const [invoices, setInvoices] = useState<Array<any>>([]);
+  // Live on-chain invoices
+  const [invoices, setInvoices] = useState<OnChainInvoice[]>([]);
 
-  // Sandbox simulation fallback state
-  const [sbSenior, setSbSenior] = useState(8000);
-  const [sbJunior, setSbJunior] = useState(2000);
-  const [sbBounty, setSbBounty] = useState(0);
-  const [sbInvoices, setSbInvoices] = useState([
-    {
-      id: 1,
-      faceValue: 10000,
-      advance: 9500,
-      debtor: "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
-      dueDate: Math.floor(Date.now() / 1000) + 60,
-      isOverdue: false,
-      status: "Factored",
-    },
-  ]);
+  const publicClient = createPublicClient({
+    chain: TARGET_CHAIN,
+    transport: http(),
+  });
 
-  // Connect Wallet & ensure correct network
   const connectWallet = async () => {
     if (typeof window === "undefined" || !(window as any).ethereum) {
-      alert("Please install MetaMask or a compatible Web3 wallet!");
+      alert("Please install MetaMask or a compatible EVM Web3 wallet.");
       return;
     }
     try {
@@ -81,84 +82,130 @@ export default function Home() {
           });
         }
       }
-      refreshOnChainData(address);
+      await refreshOnChainData(address);
     } catch (err: any) {
       console.error("Wallet connection failed:", err);
     }
   };
 
-  // Read live state from contracts
-  const refreshOnChainData = async (userAddr?: `0x${string}`) => {
+  const refreshOnChainData = useCallback(async (userAddr?: `0x${string}`) => {
     const targetAddr = userAddr || walletAddress;
-    const publicClient = createPublicClient({ chain: TARGET_CHAIN, transport: http() });
 
     try {
-      const sTotal = await publicClient.readContract({
-        address: CONTRACT_ADDRESSES.trancheVault,
-        abi: TRANCHE_VAULT_ABI,
-        functionName: "seniorDeposits",
-      });
-      const jTotal = await publicClient.readContract({
-        address: CONTRACT_ADDRESSES.trancheVault,
-        abi: TRANCHE_VAULT_ABI,
-        functionName: "juniorDeposits",
-      });
-      setSeniorVaultTotal(Number(sTotal / BigInt(1e14)));
-      setJuniorVaultTotal(Number(jTotal / BigInt(1e14)));
+      const [currentBlock, accounting] = await Promise.all([
+        publicClient.getBlockNumber(),
+        publicClient.readContract({
+          address: CONTRACT_ADDRESSES.trancheVault,
+          abi: TRANCHE_VAULT_ABI,
+          functionName: "getVaultAccounting",
+        }),
+      ]);
+
+      setBlockNumber(currentBlock);
+      setSeniorVaultTotal(accounting[0]);
+      setJuniorVaultTotal(accounting[1]);
+      setSeniorYieldReserve(accounting[2]);
+      setJuniorYieldReserve(accounting[3]);
 
       if (targetAddr) {
-        const sBal = await publicClient.readContract({
-          address: CONTRACT_ADDRESSES.trancheVault,
-          abi: TRANCHE_VAULT_ABI,
-          functionName: "seniorBalances",
-          args: [targetAddr],
-        });
-        const jBal = await publicClient.readContract({
-          address: CONTRACT_ADDRESSES.trancheVault,
-          abi: TRANCHE_VAULT_ABI,
-          functionName: "juniorBalances",
-          args: [targetAddr],
-        });
-        const potBal = await publicClient.readContract({
-          address: CONTRACT_ADDRESSES.potToken,
-          abi: MOCK_POT_ABI,
-          functionName: "balanceOf",
-          args: [targetAddr],
-        });
+        const [sBal, jBal, potBal] = await Promise.all([
+          publicClient.readContract({
+            address: CONTRACT_ADDRESSES.trancheVault,
+            abi: TRANCHE_VAULT_ABI,
+            functionName: "seniorBalances",
+            args: [targetAddr],
+          }),
+          publicClient.readContract({
+            address: CONTRACT_ADDRESSES.trancheVault,
+            abi: TRANCHE_VAULT_ABI,
+            functionName: "juniorBalances",
+            args: [targetAddr],
+          }),
+          publicClient.readContract({
+            address: CONTRACT_ADDRESSES.potToken,
+            abi: MOCK_POT_ABI,
+            functionName: "balanceOf",
+            args: [targetAddr],
+          }),
+        ]);
 
-        setSeniorBalance(Number(sBal / BigInt(1e14)));
-        setJuniorBalance(Number(jBal / BigInt(1e14)));
-        setPotWalletBalance(Number(potBal / BigInt(1e14)));
+        setSeniorBalance(sBal);
+        setJuniorBalance(jBal);
+        setPotWalletBalance(potBal);
+      }
+
+      // Read real on-chain invoices
+      const totalCount = await publicClient.readContract({
+        address: CONTRACT_ADDRESSES.invoiceNFT,
+        abi: INVOICE_NFT_ABI,
+        functionName: "totalInvoices",
+      });
+
+      const count = Number(totalCount);
+      if (count > 0) {
+        const invoicePromises = [];
+        for (let i = 1; i <= count; i++) {
+          invoicePromises.push(
+            publicClient.readContract({
+              address: CONTRACT_ADDRESSES.invoiceNFT,
+              abi: INVOICE_NFT_ABI,
+              functionName: "getInvoice",
+              args: [BigInt(i)],
+            })
+          );
+        }
+        const results = await Promise.all(invoicePromises);
+        const mapped: OnChainInvoice[] = results.map((inv) => ({
+          id: Number(inv.id),
+          borrower: inv.borrower as `0x${string}`,
+          debtorSS58: inv.debtorSS58,
+          faceValue: inv.faceValue,
+          advanceAmount: inv.advanceAmount,
+          dueDate: Number(inv.dueDate),
+          ipfsHash: inv.ipfsHash,
+          status: inv.status,
+        }));
+        setInvoices(mapped);
+      } else {
+        setInvoices([]);
       }
     } catch (err) {
-      console.warn("Contract read notice: Verify local node/testnet is running.");
+      console.warn("Live query notice (verify RPC is reachable):", err);
     }
-  };
+  }, [publicClient, walletAddress]);
 
   useEffect(() => {
-    if (walletAddress) refreshOnChainData();
+    refreshOnChainData();
     const interval = setInterval(() => {
-      if (walletAddress && !isSandbox) refreshOnChainData();
-    }, 5000);
+      refreshOnChainData();
+    }, 4000);
     return () => clearInterval(interval);
-  }, [walletAddress, isSandbox]);
+  }, [refreshOnChainData]);
 
-  // Live On-Chain Faucet
-  const handleClaimFaucet = async () => {
-    if (!walletAddress) return;
+  // Live Real Faucet Call
+  const handleClaimFaucet = async (targetWallet?: string, customAmount?: string) => {
+    const dest = (targetWallet || walletAddress) as `0x${string}`;
+    if (!dest) {
+      alert("Connect a wallet or specify a recipient address!");
+      return;
+    }
     setIsClaimingFaucet(true);
     try {
       const walletClient = createWalletClient({ chain: TARGET_CHAIN, transport: custom((window as any).ethereum) });
-      const hash = await walletClient.writeContract({
+      const parsedAmount = Math14.parse(customAmount || "10000");
+
+      const tx = await walletClient.writeContract({
         address: CONTRACT_ADDRESSES.potToken,
         abi: MOCK_POT_ABI,
         functionName: "faucet",
-        args: [walletAddress, Math14.parse("10000")],
-        account: walletAddress,
+        args: [dest, parsedAmount],
+        account: dest,
       });
-      console.log("Faucet tx:", hash);
+
+      console.log("Faucet Tx:", tx);
+      await publicClient.waitForTransactionReceipt({ hash: tx });
       await refreshOnChainData();
-      alert("Claimed 10,000 $POT Testnet Tokens directly on-chain!");
+      alert(`Claimed ${customAmount || "10000"} $POT on-chain!\nTx Hash: ${tx}`);
     } catch (err: any) {
       alert(`Faucet error: ${err.message}`);
     } finally {
@@ -166,44 +213,37 @@ export default function Home() {
     }
   };
 
-  // Live On-Chain Deposit
-  const handleDeposit = async (isSenior: boolean, amount: number) => {
-    if (isSandbox) {
-      if (isSenior) setSbSenior((prev) => prev + amount);
-      else setSbJunior((prev) => prev + amount);
-      return;
-    }
+  // Live Real Deposits & Withdrawals
+  const handleDeposit = async (isSenior: boolean, amountStr: string) => {
     if (!walletAddress) {
       await connectWallet();
       return;
     }
-
     setIsLoading(true);
     try {
       const walletClient = createWalletClient({ chain: TARGET_CHAIN, transport: custom((window as any).ethereum) });
-      const parsedAmount = Math14.parse(amount);
+      const parsed = Math14.parse(amountStr);
 
-      // 1. Approve Vault
-      const approveHash = await walletClient.writeContract({
+      const approveTx = await walletClient.writeContract({
         address: CONTRACT_ADDRESSES.potToken,
         abi: MOCK_POT_ABI,
         functionName: "approve",
-        args: [CONTRACT_ADDRESSES.trancheVault, parsedAmount],
+        args: [CONTRACT_ADDRESSES.trancheVault, parsed],
         account: walletAddress,
       });
-      console.log("Approve tx:", approveHash);
+      await publicClient.waitForTransactionReceipt({ hash: approveTx });
 
-      // 2. Deposit
-      const depositHash = await walletClient.writeContract({
+      const depTx = await walletClient.writeContract({
         address: CONTRACT_ADDRESSES.trancheVault,
         abi: TRANCHE_VAULT_ABI,
         functionName: isSenior ? "depositSenior" : "depositJunior",
-        args: [parsedAmount],
+        args: [parsed],
         account: walletAddress,
       });
-      console.log("Deposit tx:", depositHash);
+      await publicClient.waitForTransactionReceipt({ hash: depTx });
 
       await refreshOnChainData();
+      alert(`Successfully deposited ${amountStr} $POT on-chain!`);
     } catch (err: any) {
       alert(`Deposit failed: ${err.message}`);
     } finally {
@@ -211,119 +251,150 @@ export default function Home() {
     }
   };
 
-  // Live On-Chain Mint & Fund
-  const handleMintAndAdvance = async (data: {
-    faceValue: number;
-    advance: number;
-    debtor: string;
-    ipfs: string;
-    durationSeconds: number;
-  }) => {
-    if (isSandbox) {
-      const newId = sbInvoices.length + 1;
-      setSbInvoices((prev) => [
-        ...prev,
-        {
-          id: newId,
-          faceValue: data.faceValue,
-          advance: data.advance,
-          debtor: data.debtor,
-          dueDate: Math.floor(Date.now() / 1000) + data.durationSeconds,
-          isOverdue: false,
-          status: "Factored",
-        },
-      ]);
-      return;
-    }
-
+  const handleWithdraw = async (isSenior: boolean, amountStr: string) => {
     if (!walletAddress) {
       await connectWallet();
       return;
     }
-
     setIsLoading(true);
     try {
       const walletClient = createWalletClient({ chain: TARGET_CHAIN, transport: custom((window as any).ethereum) });
-      const publicClient = createPublicClient({ chain: TARGET_CHAIN, transport: http() });
+      const parsed = Math14.parse(amountStr);
 
-      // 1. Mint NFT on-chain
-      const mintTx = await walletClient.writeContract({
-        address: CONTRACT_ADDRESSES.invoiceNFT,
-        abi: INVOICE_NFT_ABI,
-        functionName: "mintInvoice",
-        args: [
-          data.debtor,
-          Math14.parse(data.faceValue),
-          Math14.parse(data.advance),
-          BigInt(data.durationSeconds),
-          data.ipfs,
-        ],
-        account: walletAddress,
-      });
-      console.log("Mint tx:", mintTx);
-
-      // Simple mock ID increment for live tracking (or read from mint event)
-      const invoiceId = BigInt(invoices.length + 1);
-
-      // 2. Approve Vault for NFT
-      await walletClient.writeContract({
-        address: CONTRACT_ADDRESSES.invoiceNFT,
-        abi: INVOICE_NFT_ABI,
-        functionName: "approve",
-        args: [CONTRACT_ADDRESSES.trancheVault, invoiceId],
-        account: walletAddress,
-      });
-
-      // 3. Fund and Advance
-      await walletClient.writeContract({
+      const tx = await walletClient.writeContract({
         address: CONTRACT_ADDRESSES.trancheVault,
         abi: TRANCHE_VAULT_ABI,
-        functionName: "fundAndAdvanceInvoice",
-        args: [invoiceId],
+        functionName: isSenior ? "withdrawSenior" : "withdrawJunior",
+        args: [parsed],
         account: walletAddress,
       });
+      await publicClient.waitForTransactionReceipt({ hash: tx });
 
-      const newInv = {
-        id: Number(invoiceId),
-        faceValue: data.faceValue,
-        advance: data.advance,
-        debtor: data.debtor,
-        dueDate: Math.floor(Date.now() / 1000) + data.durationSeconds,
-        isOverdue: false,
-        status: "Factored",
-      };
-
-      setInvoices((prev) => [...prev, newInv]);
       await refreshOnChainData();
+      alert(`Withdrawn ${amountStr} $POT successfully!`);
     } catch (err: any) {
-      alert(`Mint & Advance failed: ${err.message}`);
+      alert(`Withdrawal failed: ${err.message}`);
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Live On-Chain Default Trigger
-  const handleTriggerDefault = async (id: number) => {
-    if (isSandbox) {
-      setSbInvoices((prev) =>
-        prev.map((inv) => {
-          if (inv.id === id) {
-            const bounty = inv.faceValue * 0.02;
-            setSbBounty((b) => b + bounty);
-            setSbJunior((j) => (j > inv.advance + bounty ? j - (inv.advance + bounty) : 0));
-            return { ...inv, status: "Defaulted", isOverdue: false };
-          }
-          return inv;
-        })
-      );
-      return;
-    }
-
+  // Live Real Minting & Factoring Advance
+  const handleMintInvoice = async (data: {
+    debtorSS58: string;
+    faceValue: string;
+    advanceAmount: string;
+    durationSeconds: number;
+    ipfsHash: string;
+  }) => {
     if (!walletAddress) {
       await connectWallet();
       return;
     }
+    setIsLoading(true);
+    try {
+      const walletClient = createWalletClient({ chain: TARGET_CHAIN, transport: custom((window as any).ethereum) });
+      const fValue = Math14.parse(data.faceValue);
+      const advValue = Math14.parse(data.advanceAmount);
 
+      const tx = await walletClient.writeContract({
+        address: CONTRACT_ADDRESSES.invoiceNFT,
+        abi: INVOICE_NFT_ABI,
+        functionName: "mintInvoice",
+        args: [data.debtorSS58, fValue, advValue, BigInt(data.durationSeconds), data.ipfsHash],
+        account: walletAddress,
+      });
+      await publicClient.waitForTransactionReceipt({ hash: tx });
+
+      await refreshOnChainData();
+      alert(`Invoice Minted on-chain! Tx: ${tx}`);
+    } catch (err: any) {
+      alert(`Minting failed: ${err.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleFundAndAdvance = async (invoiceId: number) => {
+    if (!walletAddress) {
+      await connectWallet();
+      return;
+    }
+    setIsLoading(true);
+    try {
+      const walletClient = createWalletClient({ chain: TARGET_CHAIN, transport: custom((window as any).ethereum) });
+      const idBig = BigInt(invoiceId);
+
+      const appTx = await walletClient.writeContract({
+        address: CONTRACT_ADDRESSES.invoiceNFT,
+        abi: INVOICE_NFT_ABI,
+        functionName: "approve",
+        args: [CONTRACT_ADDRESSES.trancheVault, idBig],
+        account: walletAddress,
+      });
+      await publicClient.waitForTransactionReceipt({ hash: appTx });
+
+      const fundTx = await walletClient.writeContract({
+        address: CONTRACT_ADDRESSES.trancheVault,
+        abi: TRANCHE_VAULT_ABI,
+        functionName: "fundAndAdvanceInvoice",
+        args: [idBig],
+        account: walletAddress,
+      });
+      await publicClient.waitForTransactionReceipt({ hash: fundTx });
+
+      await refreshOnChainData();
+      alert(`Advance Disbursed to your wallet on-chain!`);
+    } catch (err: any) {
+      alert(`Advance funding failed: ${err.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleRepayInvoice = async (invoiceId: number, faceValue: bigint) => {
+    if (!walletAddress) {
+      await connectWallet();
+      return;
+    }
+    setIsLoading(true);
+    try {
+      const walletClient = createWalletClient({ chain: TARGET_CHAIN, transport: custom((window as any).ethereum) });
+      const idBig = BigInt(invoiceId);
+
+      const appTx = await walletClient.writeContract({
+        address: CONTRACT_ADDRESSES.potToken,
+        abi: MOCK_POT_ABI,
+        functionName: "approve",
+        args: [CONTRACT_ADDRESSES.trancheVault, faceValue],
+        account: walletAddress,
+      });
+      await publicClient.waitForTransactionReceipt({ hash: appTx });
+
+      const repayTx = await walletClient.writeContract({
+        address: CONTRACT_ADDRESSES.trancheVault,
+        abi: TRANCHE_VAULT_ABI,
+        functionName: "repayInvoice",
+        args: [idBig],
+        account: walletAddress,
+      });
+      await publicClient.waitForTransactionReceipt({ hash: repayTx });
+
+      await refreshOnChainData();
+      alert(`Invoice #${invoiceId} settled on-chain! Yield allocated.`);
+    } catch (err: any) {
+      alert(`Repayment failed: ${err.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Live Liquidation Default Workout
+  const handleTriggerDefault = async (invoiceId: number) => {
+    if (!walletAddress) {
+      await connectWallet();
+      return;
+    }
     setIsLoading(true);
     try {
       const walletClient = createWalletClient({ chain: TARGET_CHAIN, transport: custom((window as any).ethereum) });
@@ -331,58 +402,47 @@ export default function Home() {
         address: CONTRACT_ADDRESSES.liquidationEngine,
         abi: LIQUIDATION_ENGINE_ABI,
         functionName: "triggerDefault",
-        args: [BigInt(id)],
+        args: [BigInt(invoiceId)],
         account: walletAddress,
       });
+      await publicClient.waitForTransactionReceipt({ hash: tx });
 
-      console.log("Trigger default tx:", tx);
-      alert(`Default executed on-chain! Tx: ${tx}\nSubstrate DaaS Relayer is dispatching extrinsic!`);
-
-      setInvoices((prev) =>
-        prev.map((inv) => (inv.id === id ? { ...inv, status: "Defaulted", isOverdue: false } : inv))
-      );
       await refreshOnChainData();
+      alert(`Default executed on-chain! Liquidator bounty paid.\nSubstrate DaaS daemon captured event.\nTx: ${tx}`);
     } catch (err: any) {
-      alert(`Default execution failed: ${err.message}`);
+      alert(`Liquidation failed: ${err.message}`);
     } finally {
       setIsLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-background">
+    <div className="min-h-screen flex flex-col bg-background text-gray-100">
       <LiveSandboxBanner
-        isSandbox={isSandbox}
-        setIsSandbox={setIsSandbox}
-        onReset={() => {
-          setSbSenior(8000);
-          setSbJunior(2000);
-          setSbBounty(0);
-        }}
+        blockNumber={blockNumber}
         walletAddress={walletAddress}
+        potBalance={potWalletBalance}
         onConnectWallet={connectWallet}
         onClaimFaucet={handleClaimFaucet}
         isClaimingFaucet={isClaimingFaucet}
       />
 
-      {/* Main Header */}
-      <header className="border-b border-border bg-surface/50 backdrop-blur-md px-6 py-4 flex items-center justify-between">
+      <header className="border-b border-border bg-surface/60 backdrop-blur-md px-6 py-4 flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="h-10 w-10 rounded-xl bg-gradient-to-tr from-primary to-indigo-400 flex items-center justify-center font-black text-white text-xl shadow-lg shadow-indigo-500/20">
             P
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="font-extrabold text-white text-lg tracking-tight">PortaFact</h1>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-950 text-indigo-400 border border-indigo-800">
-                Portaldot V3.0 EVM
+              <h1 className="font-extrabold text-white text-lg tracking-tight">PortaFact Protocol</h1>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800">
+                Live Portaldot EVM
               </span>
             </div>
             <p className="text-xs text-gray-400">Autonomous RWA Factoring & Insured Tranche Vault</p>
           </div>
         </div>
 
-        {/* Navigation Tabs */}
         <nav className="flex items-center bg-gray-900 border border-border rounded-xl p-1">
           <button
             onClick={() => setActiveTab("invest")}
@@ -398,7 +458,7 @@ export default function Home() {
               activeTab === "borrow" ? "bg-primary text-white" : "text-gray-400 hover:text-white"
             }`}
           >
-            <Activity size={14} /> Factoring Advance
+            <Activity size={14} /> Borrower Advance
           </button>
           <button
             onClick={() => setActiveTab("liquidate")}
@@ -411,28 +471,34 @@ export default function Home() {
         </nav>
       </header>
 
-      {/* Main Content */}
       <main className="flex-1 max-w-6xl w-full mx-auto p-6 md:p-8">
         {activeTab === "invest" && (
           <InvestorTab
-            isSandbox={isSandbox}
-            seniorBalance={isSandbox ? sbSenior : seniorBalance}
-            juniorBalance={isSandbox ? sbJunior : juniorBalance}
-            seniorVaultTotal={isSandbox ? 8000 : seniorVaultTotal}
-            juniorVaultTotal={isSandbox ? 2000 : juniorVaultTotal}
+            seniorBalance={seniorBalance}
+            juniorBalance={juniorBalance}
+            seniorVaultTotal={seniorVaultTotal}
+            juniorVaultTotal={juniorVaultTotal}
+            seniorYieldReserve={seniorYieldReserve}
+            juniorYieldReserve={juniorYieldReserve}
             onDeposit={handleDeposit}
+            onWithdraw={handleWithdraw}
             isLoading={isLoading}
           />
         )}
         {activeTab === "borrow" && (
-          <BorrowerTab isSandbox={isSandbox} onMintAndAdvance={handleMintAndAdvance} isLoading={isLoading} />
+          <BorrowerTab
+            walletAddress={walletAddress}
+            invoices={invoices}
+            onMintInvoice={handleMintInvoice}
+            onFundAndAdvance={handleFundAndAdvance}
+            onRepayInvoice={handleRepayInvoice}
+            isLoading={isLoading}
+          />
         )}
         {activeTab === "liquidate" && (
           <LiquidatorTab
-            isSandbox={isSandbox}
-            invoices={isSandbox ? sbInvoices : invoices}
-            callerBountyBalance={isSandbox ? sbBounty : potWalletBalance}
-            onFastForwardTime={() => setSbInvoices((prev) => prev.map((i) => ({ ...i, isOverdue: true })))}
+            invoices={invoices}
+            callerBountyBalance={potWalletBalance}
             onTriggerDefault={handleTriggerDefault}
             isLoading={isLoading}
           />
@@ -440,7 +506,7 @@ export default function Home() {
       </main>
 
       <footer className="border-t border-border bg-surface/30 px-6 py-4 text-center text-xs text-gray-500">
-        PortaFact Protocol • Real-World Asset Solvency Engine • Powered by Portaldot Layer-0 DaaS & EVM Pallets
+        PortaFact Protocol • Production Live On-Chain Accounting • 14-Decimal Portaldot EVM Native
       </footer>
     </div>
   );

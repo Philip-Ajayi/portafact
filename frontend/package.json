@@ -9,21 +9,21 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "clsx": "^2.1.0",
-    "lucide-react": "^0.359.0",
-    "next": "14.1.4",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "tailwind-merge": "^2.2.2",
-    "viem": "^2.8.14"
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.469.0",
+    "next": "^16.4.3",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tailwind-merge": "^2.6.0",
+    "viem": "^2.21.55"
   },
   "devDependencies": {
-    "@types/node": "^20.11.24",
-    "@types/react": "^18.2.64",
-    "@types/react-dom": "^18.2.21",
-    "autoprefixer": "^10.4.18",
-    "postcss": "^8.4.35",
-    "tailwindcss": "^3.4.1",
-    "typescript": "^5.3.3"
+    "@types/node": "^22.13.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.2"
   }
 }

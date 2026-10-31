@@ -6,7 +6,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 
 /**
  * @title InvoiceNFT
- * @notice Real accounts receivable tokenization linking Portaldot Substrate SS58 identities.
+ * @notice Represents legal factoring receivables with linked Portaldot Substrate SS58 identities.
  */
 contract InvoiceNFT is ERC721URIStorage, Ownable {
     enum InvoiceStatus { Active, Factored, Repaid, Defaulted }

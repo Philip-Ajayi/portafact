@@ -23,19 +23,19 @@ export const TARGET_CHAIN = defineChain({
 });
 
 export const Math14 = {
-  SCALE: 10n ** 14n,
+  SCALE: BigInt(1e14),
   format(val: bigint | number): string {
-    const bVal = typeof val === "number" ? BigInt(Math.floor(val)) * (10n ** 14n) : val;
-    const intPart = bVal / (10n ** 14n);
-    const fracPart = bVal % (10n ** 14n);
+    const bVal = typeof val === "number" ? BigInt(Math.floor(val)) * BigInt(1e14) : val;
+    const intPart = bVal / BigInt(1e14);
+    const fracPart = bVal % BigInt(1e14);
     const fracStr = fracPart.toString().padStart(14, "0").slice(0, 2);
     return `${intPart.toLocaleString()}.${fracStr}`;
   },
   parse(val: string | number): bigint {
     const sVal = val.toString();
     const parts = sVal.split(".");
-    const intPart = BigInt(parts[0] || "0") * (10n ** 14n);
-    let fracPart = 0n;
+    const intPart = BigInt(parts[0] || "0") * BigInt(1e14);
+    let fracPart = BigInt(0);
     if (parts[1]) {
       const padded = parts[1].slice(0, 14).padEnd(14, "0");
       fracPart = BigInt(padded);
@@ -56,16 +56,34 @@ export const INVOICE_NFT_ABI = [
   { inputs: [{ name: "to", type: "address" }, { name: "tokenId", type: "uint256" }], name: "approve", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "id", type: "uint256" }], name: "getInvoice", outputs: [{ components: [{ name: "id", type: "uint256" }, { name: "borrower", type: "address" }, { name: "debtorSS58", type: "string" }, { name: "faceValue", type: "uint256" }, { name: "advanceAmount", type: "uint256" }, { name: "dueDate", type: "uint256" }, { name: "ipfsHash", type: "string" }, { name: "status", type: "uint8" }], type: "tuple" }], stateMutability: "view", type: "function" },
   { inputs: [{ name: "tokenId", type: "uint256" }], name: "ownerOf", outputs: [{ type: "address" }], stateMutability: "view", type: "function" },
+  { inputs: [], name: "totalInvoices", outputs: [{ type: "uint256" }], stateMutability: "view", type: "function" },
 ] as const;
 
 export const TRANCHE_VAULT_ABI = [
   { inputs: [{ name: "amount", type: "uint256" }], name: "depositSenior", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "amount", type: "uint256" }], name: "depositJunior", outputs: [], stateMutability: "nonpayable", type: "function" },
+  { inputs: [{ name: "amount", type: "uint256" }], name: "withdrawSenior", outputs: [], stateMutability: "nonpayable", type: "function" },
+  { inputs: [{ name: "amount", type: "uint256" }], name: "withdrawJunior", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "invoiceId", type: "uint256" }], name: "fundAndAdvanceInvoice", outputs: [], stateMutability: "nonpayable", type: "function" },
+  { inputs: [{ name: "invoiceId", type: "uint256" }], name: "repayInvoice", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [], name: "seniorDeposits", outputs: [{ type: "uint256" }], stateMutability: "view", type: "function" },
   { inputs: [], name: "juniorDeposits", outputs: [{ type: "uint256" }], stateMutability: "view", type: "function" },
+  { inputs: [], name: "seniorYieldReserve", outputs: [{ type: "uint256" }], stateMutability: "view", type: "function" },
+  { inputs: [], name: "juniorYieldReserve", outputs: [{ type: "uint256" }], stateMutability: "view", type: "function" },
   { inputs: [{ name: "", type: "address" }], name: "seniorBalances", outputs: [{ type: "uint256" }], stateMutability: "view", type: "function" },
   { inputs: [{ name: "", type: "address" }], name: "juniorBalances", outputs: [{ type: "uint256" }], stateMutability: "view", type: "function" },
+  {
+    inputs: [],
+    name: "getVaultAccounting",
+    outputs: [
+      { name: "_seniorDeposits", type: "uint256" },
+      { name: "_juniorDeposits", type: "uint256" },
+      { name: "_seniorYieldReserve", type: "uint256" },
+      { name: "_juniorYieldReserve", type: "uint256" }
+    ],
+    stateMutability: "view",
+    type: "function"
+  },
 ] as const;
 
 export const LIQUIDATION_ENGINE_ABI = [

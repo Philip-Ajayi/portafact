@@ -20,13 +20,14 @@ contract TrancheVault is Ownable, ReentrancyGuard {
     InvoiceNFT public immutable invoiceNFT;
     address public liquidationEngine;
 
+    // Tranche accounting
     uint256 public seniorDeposits;
     uint256 public juniorDeposits;
     uint256 public seniorYieldReserve;
     uint256 public juniorYieldReserve;
 
-    uint256 public constant SENIOR_TARGET_APY_BIPS = 800; // 8.00%
-    uint256 public constant PROTOCOL_SAFETY_BIPS = 500;   // 5.00%
+    uint256 public constant SENIOR_TARGET_APY_BIPS = 800;  // 8.00% fixed target
+    uint256 public constant PROTOCOL_SAFETY_BIPS = 500;    // 5.00% safety buffer
 
     mapping(address => uint256) public seniorBalances;
     mapping(address => uint256) public juniorBalances;
@@ -52,20 +53,17 @@ contract TrancheVault is Ownable, ReentrancyGuard {
         liquidationEngine = _engine;
     }
 
-    function getVaultAccounting() external view returns (
-        uint256 _seniorDeposits,
-        uint256 _juniorDeposits,
-        uint256 _seniorYieldReserve,
-        uint256 _juniorYieldReserve,
-        uint256 _vaultTokenBalance
-    ) {
-        return (
-            seniorDeposits,
-            juniorDeposits,
-            seniorYieldReserve,
-            juniorYieldReserve,
-            potToken.balanceOf(address(this))
-        );
+    function getVaultAccounting()
+        external
+        view
+        returns (
+            uint256 _seniorDeposits,
+            uint256 _juniorDeposits,
+            uint256 _seniorYieldReserve,
+            uint256 _juniorYieldReserve
+        )
+    {
+        return (seniorDeposits, juniorDeposits, seniorYieldReserve, juniorYieldReserve);
     }
 
     function depositSenior(uint256 amount) external nonReentrant {
@@ -86,7 +84,6 @@ contract TrancheVault is Ownable, ReentrancyGuard {
 
     function withdrawSenior(uint256 amount) external nonReentrant {
         require(seniorBalances[msg.sender] >= amount, "Insufficient senior balance");
-        require(potToken.balanceOf(address(this)) >= amount, "Insufficient vault liquidity");
         seniorBalances[msg.sender] -= amount;
         seniorDeposits -= amount;
         potToken.safeTransfer(msg.sender, amount);
@@ -95,7 +92,6 @@ contract TrancheVault is Ownable, ReentrancyGuard {
 
     function withdrawJunior(uint256 amount) external nonReentrant {
         require(juniorBalances[msg.sender] >= amount, "Insufficient junior balance");
-        require(potToken.balanceOf(address(this)) >= amount, "Insufficient vault liquidity");
         juniorBalances[msg.sender] -= amount;
         juniorDeposits -= amount;
         potToken.safeTransfer(msg.sender, amount);
@@ -110,10 +106,12 @@ contract TrancheVault is Ownable, ReentrancyGuard {
         uint256 totalAvailable = seniorDeposits + juniorDeposits;
         require(totalAvailable >= inv.advanceAmount, "Insufficient vault liquidity");
 
+        // Lock NFT into vault
         invoiceNFT.transferFrom(msg.sender, address(this), invoiceId);
         invoiceNFT.updateStatus(invoiceId, InvoiceNFT.InvoiceStatus.Factored);
         activeFactoredInvoices[invoiceId] = true;
 
+        // Disburse liquidity to borrower
         potToken.safeTransfer(inv.borrower, inv.advanceAmount);
         emit AdvanceDisbursed(invoiceId, inv.borrower, inv.advanceAmount);
     }
@@ -126,7 +124,8 @@ contract TrancheVault is Ownable, ReentrancyGuard {
         potToken.safeTransferFrom(msg.sender, address(this), fullRepayment);
 
         uint256 grossProfit = fullRepayment - inv.advanceAmount;
-        uint256 seniorYieldShare = grossProfit.mulBips(3000); // 30% to senior pool
+        // Senior receives fixed fee fraction; junior absorbs excess margin
+        uint256 seniorYieldShare = grossProfit.mulBips(3000); // 30% of factoring spread
         uint256 juniorYieldShare = grossProfit - seniorYieldShare;
 
         seniorYieldReserve += seniorYieldShare;
@@ -148,11 +147,13 @@ contract TrancheVault is Ownable, ReentrancyGuard {
         uint256 unrecoveredAdvance = inv.advanceAmount;
         uint256 totalJuniorLoss = unrecoveredAdvance + bountyAmount;
 
+        // Junior absorbs default first
         if (juniorDeposits >= totalJuniorLoss) {
             juniorDeposits -= totalJuniorLoss;
         } else {
             uint256 remainingLoss = totalJuniorLoss - juniorDeposits;
             juniorDeposits = 0;
+            // Extreme tail-risk: senior only absorbs if junior is fully wiped out
             if (seniorDeposits > remainingLoss) {
                 seniorDeposits -= remainingLoss;
             } else {
@@ -163,7 +164,9 @@ contract TrancheVault is Ownable, ReentrancyGuard {
         activeFactoredInvoices[invoiceId] = false;
         invoiceNFT.updateStatus(invoiceId, InvoiceNFT.InvoiceStatus.Defaulted);
 
+        // Transfer liquidator bounty
         potToken.safeTransfer(bountyRecipient, bountyAmount);
+
         emit DefaultAbsorptionExecuted(invoiceId, totalJuniorLoss, bountyAmount);
     }
 }

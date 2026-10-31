@@ -17,6 +17,16 @@ import {
   LIQUIDATION_ENGINE_ABI,
 } from "../lib/contracts";
 
+export interface OnChainInvoice {
+  id: number;
+  faceValue: number;
+  advance: number;
+  debtor: string;
+  dueDate: number;
+  isOverdue: boolean;
+  status: string;
+}
+
 export default function Home() {
   const [isSandbox, setIsSandbox] = useState(false);
   const [activeTab, setActiveTab] = useState<"invest" | "borrow" | "liquidate">("invest");
@@ -32,13 +42,13 @@ export default function Home() {
   const [potWalletBalance, setPotWalletBalance] = useState(0);
 
   // Invoice tracking
-  const [invoices, setInvoices] = useState<Array<any>>([]);
+  const [invoices, setInvoices] = useState<OnChainInvoice[]>([]);
 
   // Sandbox simulation fallback state
   const [sbSenior, setSbSenior] = useState(8000);
   const [sbJunior, setSbJunior] = useState(2000);
   const [sbBounty, setSbBounty] = useState(0);
-  const [sbInvoices, setSbInvoices] = useState([
+  const [sbInvoices, setSbInvoices] = useState<OnChainInvoice[]>([
     {
       id: 1,
       faceValue: 10000,
@@ -103,7 +113,7 @@ export default function Home() {
         setPotWalletBalance(Number(potBal / BigInt(1e14)));
       }
 
-      // Fetch all invoices
+      // Fetch active on-chain invoices
       try {
         const total = await publicClient.readContract({
           address: CONTRACT_ADDRESSES.invoiceNFT,
@@ -111,8 +121,10 @@ export default function Home() {
           functionName: "totalInvoices",
         });
 
-        const fetched: any[] = [];
+        const fetched: OnChainInvoice[] = [];
         const totalNum = Number(total);
+        const now = Math.floor(Date.now() / 1000);
+
         for (let i = 1; i <= totalNum; i++) {
           const inv = await publicClient.readContract({
             address: CONTRACT_ADDRESSES.invoiceNFT,
@@ -130,7 +142,6 @@ export default function Home() {
               ? "Defaulted"
               : "Active";
 
-          const now = Math.floor(Date.now() / 1000);
           fetched.push({
             id: Number(inv.id),
             faceValue: Number(inv.faceValue / BigInt(1e14)),
@@ -145,7 +156,7 @@ export default function Home() {
           setInvoices(fetched);
         }
       } catch {
-        // Fallback if totalInvoices is uninitialized
+        // Fallback for empty invoice state
       }
     } catch (err) {
       console.warn("Contract read notice: Check local RPC / testnet connection.", err);
@@ -388,46 +399,6 @@ export default function Home() {
     }
   };
 
-  // Live Repay Invoice
-  const handleRepayInvoice = async (invoiceId: number, faceValue: number) => {
-    if (!walletAddress) {
-      await connectWallet();
-      return;
-    }
-
-    setIsLoading(true);
-    try {
-      const walletClient = createWalletClient({ chain: TARGET_CHAIN, transport: custom((window as any).ethereum) });
-      const publicClient = createPublicClient({ chain: TARGET_CHAIN, transport: http() });
-      const parsedFaceValue = Math14.parse(faceValue);
-
-      const approveHash = await walletClient.writeContract({
-        address: CONTRACT_ADDRESSES.potToken,
-        abi: MOCK_POT_ABI,
-        functionName: "approve",
-        args: [CONTRACT_ADDRESSES.trancheVault, parsedFaceValue],
-        account: walletAddress,
-      });
-      await publicClient.waitForTransactionReceipt({ hash: approveHash });
-
-      const repayHash = await walletClient.writeContract({
-        address: CONTRACT_ADDRESSES.trancheVault,
-        abi: TRANCHE_VAULT_ABI,
-        functionName: "repayInvoice",
-        args: [BigInt(invoiceId)],
-        account: walletAddress,
-      });
-      await publicClient.waitForTransactionReceipt({ hash: repayHash });
-
-      alert(`Invoice #${invoiceId} repaid in full!`);
-      await refreshOnChainData();
-    } catch (err: any) {
-      alert(`Repayment failed: ${err.message}`);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   // Live Default Trigger
   const handleTriggerDefault = async (id: number) => {
     if (isSandbox) {
@@ -547,7 +518,11 @@ export default function Home() {
           />
         )}
         {activeTab === "borrow" && (
-          <BorrowerTab isSandbox={isSandbox} onMintAndAdvance={handleMintAndAdvance} isLoading={isLoading} />
+          <BorrowerTab
+            isSandbox={isSandbox}
+            onMintAndAdvance={handleMintAndAdvance}
+            isLoading={isLoading}
+          />
         )}
         {activeTab === "liquidate" && (
           <LiquidatorTab
